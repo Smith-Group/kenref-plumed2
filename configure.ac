@@ -324,6 +324,7 @@ PLUMED_CONFIG_ENABLE([af_cuda],[search for arrayfire_cuda],[no])
 PLUMED_CONFIG_ENABLE([af_cpu],[search for arrayfire_cpu],[no])
 PLUMED_CONFIG_ENABLE([libtorch],[search for libtorch],[no]) #added by luigibonati
 PLUMED_CONFIG_ENABLE([libmetatomic],[search for libmetatomic],[no])
+PLUMED_CONFIG_ENABLE([kenref],[search for kenref core library],[no]) # Added by Amr Alhossary
 
 AC_ARG_VAR(SOEXT,[extension of dynamic libraries (so/dylib)])
 AC_ARG_VAR(STATIC_LIBS,[variables that should be linked statically directly to MD code - configure will add here -ldl if necessary ])
@@ -926,6 +927,122 @@ fi
 if test "$af_cpu" = true ; then
   PLUMED_CHECK_PACKAGE([arrayfire.h],[af_is_double],[__PLUMED_HAS_ARRAYFIRE],[afcpu])
 fi
+
+##if test "$kenref" = true; then
+## Check for KEnRef library
+#PKG_CHECK_MODULES([KENREF_CORE], [kenref_core >= 1.0.0], [
+#    # Found kenref_core, check for Eigen3
+#    PKG_CHECK_MODULES([EIGEN3], [eigen3 >= 3.4.0], [
+#        AC_DEFINE([HAVE_KENREF], [1], [Define if KEnRef is available])
+#        AC_DEFINE([HAVE_EIGEN3], [1], [Define if Eigen3 is available])
+#        KENREF_CFLAGS="$KENREF_CORE_CFLAGS $EIGEN3_CFLAGS"
+#        KENREF_LIBS="$KENREF_CORE_LIBS"
+#        have_kenref=yes
+#        kenref_self_contained=no
+#        AC_MSG_NOTICE([KEnRef found with external Eigen3])
+#    ], [
+#        AC_MSG_WARN([kenref_core requires Eigen3 but it was not found])
+#        have_kenref=no
+#    ])
+#], [
+#    # Try self-contained version
+#    PKG_CHECK_MODULES([KENREF_SELF], [kenref_and_eigen3 >= 1.0.0], [
+#        AC_DEFINE([HAVE_KENREF], [1], [Define if KEnRef is available])
+#        AC_DEFINE([KENREF_SELF_CONTAINED], [1], [Define if using self-contained KEnRef])
+#        KENREF_CFLAGS="$KENREF_SELF_CFLAGS"
+#        KENREF_LIBS="$KENREF_SELF_LIBS"
+#        have_kenref=yes
+#        kenref_self_contained=yes
+#        AC_MSG_NOTICE([KEnRef found (self-contained with embedded Eigen3)])
+#    ], [
+#        have_kenref=no
+#        AC_MSG_NOTICE([KEnRef library not found])
+#    ])
+#])
+#
+#AM_CONDITIONAL([HAVE_KENREF], [test "x$have_kenref" = "xyes"])
+#AM_CONDITIONAL([KENREF_SELF_CONTAINED], [test "x$kenref_self_contained" = "xyes"])
+#AC_SUBST([KENREF_CFLAGS])
+#AC_SUBST([KENREF_LIBS])
+#
+##fi
+
+# ==============================================================================
+# KEnRef LIBRARY CHECK (Standard Autoconf Implementation)
+# ==============================================================================
+AC_DEFUN([KENREF_CHECK_LIBS], [
+  AC_MSG_NOTICE([Checking for KEnRef (NMR Relaxation Energy potential) using PKG-CONFIG...])
+
+  # --- Define status variables using AC_SUBST ---
+  # These variables will be substituted into Makefiles and other outputs.
+  # We initialize the flags and the required link/include variables to empty.
+  AC_SUBST([HAVE_KENREF], [no])
+  AC_SUBST([KENREF_LIBS], [""])
+  AC_SUBST([KENREF_INCLUDE], [""])
+
+
+  # --- Try 1: Separate kenref_core and Eigen3 ---
+  AC_MSG_NOTICE([  Trying: kenref_core + external Eigen3...])
+
+  # PKG_CHECK_MODULES checks for both Cflags and Libs.
+  # If found, it defines: KENREF_C_CFLAGS, KENREF_C_LIBS, KENREF_E_CFLAGS, KENREF_E_LIBS
+  # Note: The third argument is the shell command if found, fourth is if not found.
+
+  PKG_CHECK_MODULES([KENREF_C], [kenref_core], [
+    AC_MSG_NOTICE([    Found kenref_core. Checking for Eigen3...])
+
+    PKG_CHECK_MODULES([KENREF_E], [eigen3], [
+
+      # SUCCESS 1: Found both. Set final variables.
+      AC_MSG_NOTICE([    SUCCESS: KEnRef Core linked with external Eigen3.])
+
+      AC_SUBST([KENREF_LIBS], ["$KENREF_C_LIBS $KENREF_E_LIBS"])
+      AC_SUBST([KENREF_INCLUDE], ["$KENREF_C_CFLAGS $KENREF_E_CFLAGS"])
+      AC_SUBST([HAVE_KENREF], [yes])
+      # Next line is new
+      LIBS="$KENREF_C_LIBS $KENREF_E_LIBS $LIBS"
+      have_kenref=yes
+    ], [
+      # FAILURE 1b: kenref_core found, but Eigen3 not found.
+      AC_MSG_NOTICE([    FAILURE: Eigen3 not available. Falling back...])
+    ])
+  ], [
+    # FAILURE 1a: kenref_core not found.
+    AC_MSG_NOTICE([  kenref_core not found. Falling back to kenref_and_eigen3...])
+  ])
+
+
+  # --- Try 2: Self-Contained kenref_and_eigen3 (Fallback) ---
+  # We only run this if HAVE_KENREF is still 'no' (i.e., Try 1 failed).
+  AS_IF([test "x$HAVE_KENREF" != "xyes"], [
+
+    AC_MSG_NOTICE([  Trying: kenref_and_eigen3 (self-contained)...])
+
+    PKG_CHECK_MODULES([KENREF_FALLBACK], [kenref_and_eigen3], [
+
+      # SUCCESS 2: Found the fallback. Set final variables.
+      AC_MSG_NOTICE([    SUCCESS: KEnRef linked with self-contained library.])
+
+      AC_SUBST([KENREF_LIBS], ["$KENREF_FALLBACK_LIBS"])
+      AC_SUBST([KENREF_INCLUDE], ["$KENREF_FALLBACK_CFLAGS"])
+      AC_SUBST([HAVE_KENREF], [yes])
+      # Next line is new
+      LIBS="$KENREF_FALLBACK_LIBS $LIBS"
+      have_kenref=yes
+    ], [
+      # FAILURE 2: Neither option worked.
+      AC_MSG_NOTICE([    FAILURE: KEnRef integration not possible. Neither pkg-config file found.])
+      AC_SUBST([HAVE_KENREF], [no])
+      have_kenref=no
+    ])
+  ])
+
+  # Final status output
+  AC_MSG_NOTICE([KEnRef Final Status: $HAVE_KENREF])
+])dnl
+
+# Require the check to run during the PLUMED configuration process
+KENREF_CHECK_LIBS
 
 # libmetatomic requires libtorch
 if test $libmetatomic = true ; then
