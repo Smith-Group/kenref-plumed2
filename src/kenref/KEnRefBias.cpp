@@ -28,7 +28,7 @@ namespace PLMD::kenref {
         ActionAtomistic::registerKeywords(keys);
 
         keys.setDisplayName("KENREF");
-        keys.use("ARG");
+        // keys.use("ARG");  // Commented out - ARG not needed for this bias
         // 2nd: Add your keywords here
         // Required parameters
         keys.add("compulsory", "MODEL", "SIGMA", "The energy model to use (SIGMA or PLATEAUS)");
@@ -73,6 +73,12 @@ namespace PLMD::kenref {
     //  Constructor
     // ============================================================
     KEnRefBias::KEnRefBias(const ActionOptions &ao) : PLUMED_BIAS_INIT(ao), ActionAtomistic(ao) {
+
+        // volatile bool holdToDebug = true;
+        // while (/*simulationIndex > 0 &&*/ holdToDebug) {
+        //     sleep(1);
+        // }
+
         // Parse your keywords here
 
         // --- Energy model ---
@@ -230,7 +236,10 @@ namespace PLMD::kenref {
     //  PLUMED atom numbering instead of GROMACS domain-decomp IDs.
     // ============================================================
     void KEnRefBias::initializeParameters() {
-        log.printf("  KEnRefBias::initializeParameters()\n");
+        log.printf("KEnRefBias::initializeParameters()\n - at log");
+        std::cout << "KEnRefBias::initializeParameters() - at stdout\n";
+        std::cout << "MPI DEBUG: multi_sim_comm size = " << multi_sim_comm.Get_size()
+                  << " rank = " << multi_sim_comm.Get_rank() << std::endl;
 
         // NOTE: atomName_to_globalSerial_map_, atomName_pairs_, spec_den_data_list_,
         // experimental_data_table_, and g0_ are already populated by the constructor.
@@ -347,6 +356,7 @@ namespace PLMD::kenref {
         const int subSize = subAtomsX_.rows() * subAtomsX_.cols();
         allDerivatives_buffer_.resize(static_cast<size_t>(subSize) * numSimulations, 0);
         derivatives_buffer_.resize(subSize, 0); //TODO No need to resize it if ! isMultiSim
+        std::cout << "Buffers initialized\n";
 
         //TODO I want the program to be high performance.
         //  1) allocate a new buffer every cycle then copy the data between memory locations?
@@ -391,6 +401,7 @@ namespace PLMD::kenref {
         fillSubAtomsX(lastFrameSubAtomsX_);
 
         log.printf("  initializeParameters done:  %d sub-atoms, %zu atom pairs\n", numSubAtoms, atomId_pairs_.size());
+        std::cout << "  initializeParameters done:  "<< numSubAtoms <<" sub-atoms, "<< atomId_pairs_.size() <<" atom pairs\n";
     }
 
     // ============================================================
@@ -514,8 +525,10 @@ namespace PLMD::kenref {
         const int numSimulations = isMultiSim ? Action::multi_sim_comm.Get_size() : 1;
         const int simulationIndex = isMultiSim ? Action::multi_sim_comm.Get_rank() : 0;
 
-        if (step % 10 == 0)
+        if (step % 10 == 0) {
             log.printf("  --> numSimulations %d  simulationIndex %d  step %ld\n", numSimulations, simulationIndex, step);
+            log.flush();
+        }
 
         // ---- Kabsch alignment --------------------------------------------------------
         //   Mirrors the "fit all models to reference" block in calculateForces().
@@ -534,10 +547,12 @@ namespace PLMD::kenref {
 
         // 4) Fill subAtomsX with current positions (Å)
         fillSubAtomsX(subAtomsX_);
+        std::cout << "Sub atoms positions filled\n";
 
         // 5) NoJump correction on sub atoms
         restoreNoJump(subAtomsX_, lastFrameSubAtomsX_, box, /*toAngstrom=*/true,
             static_cast<int>(OpenMP::getNumThreads()), step % 10 == 0);
+        std::cout << "restoreNoJump(subAtomsX) done";
 
         // 6) Update "last frame" buffers
         //TODO Do the next 2 lines copy the data only or allocate **new** buffers as well?
@@ -546,6 +561,7 @@ namespace PLMD::kenref {
 
         // 7) Apply Kabsch rotation/translation to sub atoms
         subAtomsX_ = Kabsch_Umeyama<KEnRef_Real_t>::applyTransform(affine, subAtomsX_);
+        std::cout << "Kabsch rotation/translation applied to sub atoms\n";
 
         // ---- Multi-simulation: gather all replicas' coordinates on rank 0 ------------
         //   Mirrors the MPI_Gather block.
