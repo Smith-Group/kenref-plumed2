@@ -50,12 +50,8 @@ AC_DEFUN([PLUMED_CHECK_CXXFLAG], [
   save_CXXFLAGS="$CXXFLAGS"
   CXXFLAGS="$CXXFLAGS $1"
   AC_MSG_CHECKING([whether $CXX accepts $1])
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([])],
-    [
-      AC_LINK_IFELSE([AC_LANG_PROGRAM([])],
-        [AC_MSG_RESULT([yes])],
-        [AC_MSG_RESULT([not linking]); CXXFLAGS="$save_CXXFLAGS"])
-    ],
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([])],
+    [AC_MSG_RESULT([yes])],
     [AC_MSG_RESULT([no]); CXXFLAGS="$save_CXXFLAGS"]
   )
 ])
@@ -67,13 +63,9 @@ AC_DEFUN([PLUMED_CHECK_CFLAG], [
   save_CFLAGS="$CFLAGS"
   CFLAGS="$CFLAGS $1"
   AC_MSG_CHECKING([whether $CC accepts $1])
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([])],
-    [
-      AC_LINK_IFELSE([AC_LANG_PROGRAM([])],
-        [AC_MSG_RESULT([yes])],
-        [AC_MSG_RESULT([not linking]); CCFLAGS="$save_CCFLAGS"])
-    ],
-    [AC_MSG_RESULT([no]); CCFLAGS="$save_CCFLAGS"]
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([])],
+    [AC_MSG_RESULT([yes])],
+    [AC_MSG_RESULT([no]); CFLAGS="$save_CFLAGS"]
   )
   AC_LANG_POP
 ])

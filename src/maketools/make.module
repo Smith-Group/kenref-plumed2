@@ -12,6 +12,10 @@ endif
 # if machine dependent configuration has been found:
 ifdef GCCDEP
 
+# Suppress OpenMP vectorization failure warnings when using -Werror
+# This is needed for Clang 20+ which treats optimization failures as errors
+CXXFLAGS += -Wno-pass-failed
+
 # source for plumed kernel
 SRC=$(wildcard *.cpp)
 
