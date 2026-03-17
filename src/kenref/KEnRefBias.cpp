@@ -28,7 +28,7 @@ namespace PLMD::kenref {
         ActionAtomistic::registerKeywords(keys);
 
         keys.setDisplayName("KENREF");
-        keys.use("ARG");
+        // keys.use("ARG");  // Commented out - ARG not needed for this bias
         // 2nd: Add your keywords here
         // Required parameters
         keys.add("compulsory", "MODEL", "SIGMA", "The energy model to use (SIGMA or PLATEAUS)");
