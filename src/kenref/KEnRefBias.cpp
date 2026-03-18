@@ -237,9 +237,7 @@ namespace PLMD::kenref {
     // ============================================================
     void KEnRefBias::initializeParameters() {
         log.printf("KEnRefBias::initializeParameters()\n - at log");
-        std::cout << "KEnRefBias::initializeParameters() - at stdout\n";
-        std::cout << "MPI DEBUG: multi_sim_comm size = " << multi_sim_comm.Get_size()
-                  << " rank = " << multi_sim_comm.Get_rank() << std::endl;
+        log.printf("MPI DEBUG: multi_sim_comm size = %zu rank = %zu\n", multi_sim_comm.Get_size(), multi_sim_comm.Get_rank());
 
         // NOTE: atomName_to_globalSerial_map_, atomName_pairs_, spec_den_data_list_,
         // experimental_data_table_, and g0_ are already populated by the constructor.
@@ -356,7 +354,6 @@ namespace PLMD::kenref {
         const int subSize = subAtomsX_.rows() * subAtomsX_.cols();
         allDerivatives_buffer_.resize(static_cast<size_t>(subSize) * numSimulations, 0);
         derivatives_buffer_.resize(subSize, 0); //TODO No need to resize it if ! isMultiSim
-        std::cout << "Buffers initialized\n";
 
         //TODO I want the program to be high performance.
         //  1) allocate a new buffer every cycle then copy the data between memory locations?
@@ -510,7 +507,6 @@ namespace PLMD::kenref {
     //  calculate()   (≈ KEnRefForceProvider::calculateForces())
     // ============================================================
     void KEnRefBias::calculate() {
-        std::cout << "calculate() called at step:" << getStep() << std::endl;
         const auto begin = std::chrono::high_resolution_clock::now();
         const long step = getStep();
 
@@ -521,11 +517,12 @@ namespace PLMD::kenref {
         }
 
         // ---- MPI / replica setup (mirrors the simulationContext_ / numSimulations block)
-        const bool isMultiSim = Communicator::plumedHasMPI() && Communicator::initialized() && Action::multi_sim_comm.Get_size() > 1;
-        const int numSimulations = isMultiSim ? Action::multi_sim_comm.Get_size() : 1;
-        const int simulationIndex = isMultiSim ? Action::multi_sim_comm.Get_rank() : 0;
+        const bool isMultiSim = Communicator::plumedHasMPI() && Communicator::initialized() && multi_sim_comm.Get_size() > 1;
+        const int numSimulations = isMultiSim ? multi_sim_comm.Get_size() : 1;
+        const int simulationIndex = isMultiSim ? multi_sim_comm.Get_rank() : 0;
 
         if (step % 10 == 0) {
+            std::cout << "step:" << getStep() << std::endl;
             log.printf("  --> numSimulations %d  simulationIndex %d  step %ld\n", numSimulations, simulationIndex, step);
             log.flush();
         }
@@ -547,12 +544,10 @@ namespace PLMD::kenref {
 
         // 4) Fill subAtomsX with current positions (Å)
         fillSubAtomsX(subAtomsX_);
-        std::cout << "Sub atoms positions filled\n";
 
         // 5) NoJump correction on sub atoms
         restoreNoJump(subAtomsX_, lastFrameSubAtomsX_, box, /*toAngstrom=*/true,
             static_cast<int>(OpenMP::getNumThreads()), step % 10 == 0);
-        std::cout << "restoreNoJump(subAtomsX) done";
 
         // 6) Update "last frame" buffers
         //TODO Do the next 2 lines copy the data only or allocate **new** buffers as well?
@@ -561,7 +556,6 @@ namespace PLMD::kenref {
 
         // 7) Apply Kabsch rotation/translation to sub atoms
         subAtomsX_ = Kabsch_Umeyama<KEnRef_Real_t>::applyTransform(affine, subAtomsX_);
-        std::cout << "Kabsch rotation/translation applied to sub atoms\n";
 
         // ---- Multi-simulation: gather all replicas' coordinates on rank 0 ------------
         //   Mirrors the MPI_Gather block.
@@ -572,7 +566,7 @@ namespace PLMD::kenref {
         CoordsMatrixType<KEnRef_Real_t> allSimulationsSubAtomsX; //TODO Save a buffer allSimulationsSubAtomsX_ and create a reference to reuse it every step.
         if (isMultiSim) {
             allSimulationsSubAtomsX.resize(numSimulations * subAtomsX_.rows(), 3);
-            multi_sim_comm.Gather(subAtomsX_.data(), subSize, allSimulationsSubAtomsX.data(), subSize * numSimulations, /*root=*/0);
+            multi_sim_comm.Gather(subAtomsX_.data(), subSize, allSimulationsSubAtomsX.data(), subSize, /*root=*/0);
         } else {
             allSimulationsSubAtomsX = subAtomsX_;
         }
@@ -603,14 +597,13 @@ namespace PLMD::kenref {
                     break;
 
                 case KEnRef<KEnRef_Real_t>::energyModel::SIGMA:
-                    log.printf("DEBUG: About to call coord_array_to_sigma_energy\n");
-                    log.printf("  allSims_vec.size() = %zu\n", allSims_vec.size());
-                    for (size_t i = 0; i < allSims_vec.size(); ++i) {
-                        log.printf("  allSims_vec[%zu]: rows=%d, cols=%d\n", i, (int)allSims_vec[i].rows(), (int)allSims_vec[i].cols());
-                    }
-                    log.printf("  spec_den_data_list_.size() = %zu\n", spec_den_data_list_.size());
-                    log.printf("  atomName_to_sub0Id_map_.size() = %zu\n", atomName_to_sub0Id_map_.size());
-                    log.flush();
+                    // log.printf("  allSims_vec.size() = %zu\n", allSims_vec.size());
+                    // for (size_t i = 0; i < allSims_vec.size(); ++i) {
+                    //     log.printf("  allSims_vec[%zu]: rows=%d, cols=%d\n", i, (int)allSims_vec[i].rows(), (int)allSims_vec[i].cols());
+                    // }
+                    // log.printf("  spec_den_data_list_.size() = %zu\n", spec_den_data_list_.size());
+                    // log.printf("  atomName_to_sub0Id_map_.size() = %zu\n", atomName_to_sub0Id_map_.size());
+                    // log.flush();
 
                     std::tie(energy, all_derivatives_opt) =
                             KEnRef<KEnRef_Real_t>::coord_array_to_sigma_energy(
@@ -623,7 +616,7 @@ namespace PLMD::kenref {
             }
 
             if (step % 10 == 0)
-                log.printf("  Step %ld  KEnRef energy = %f\n", step, energy);
+                log.printf("  Step %ld  KEnRef energy = %g\n", step, energy);
         }
 
         // ---- Scatter derivatives back to each replica --------------------------------
@@ -643,14 +636,14 @@ namespace PLMD::kenref {
         if (isMultiSim) {
             // Multi-simulation: scatter derivatives from root to all replicas
             // // Option 1: Use Communicator::Scatter wrapper (preferred, requires PLUMED PR)
-            // multi_sim_comm.Scatter(allDerivatives_buffer_.data(), subSize * numSimulations, derivatives_buffer_.data(), subSize, /*root=*/0);
+            // multi_sim_comm.Scatter(allDerivatives_buffer_.data(), subSize, derivatives_buffer_.data(), subSize, /*root=*/0);
             // // TODO When the PR is approved, use option 1 and delete option 3.
             // Option 3: Use direct MPI_Scatter as fallback (until PR is accepted)
             #if defined(__PLUMED_HAS_MPI)
             if (Communicator::initialized()) {
                 // Direct MPI_Scatter call as fallback
                 MPI_Scatter(
-                    allDerivatives_buffer_.data(), subSize * numSimulations, MPI_DOUBLE,
+                    allDerivatives_buffer_.data(), subSize, MPI_DOUBLE,
                     derivatives_buffer_.data(), subSize, MPI_DOUBLE,
                     0, multi_sim_comm.Get_comm());
             } else {
