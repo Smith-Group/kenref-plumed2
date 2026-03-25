@@ -225,7 +225,7 @@ namespace PLMD::kenref {
         // log.printf("  %zu relaxation rates\n", rates_.size());
 
         cite("Restraining interproton angular and distance dynamics with KEnRef. "
-            "Amr Alhossary & Colin Smith. (The ACS Journal of Physical Chemistry B)");
+            "Amr Alhossary & Colin Smith, J Phys Chem B. 130, 11 (2026) DOI: 10.1021/acs.jpcb.5c08554");
     }
 
     // ============================================================
