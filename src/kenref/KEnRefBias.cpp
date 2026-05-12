@@ -53,15 +53,15 @@ namespace PLMD::kenref {
         // keys.add("optional", "GUIDE_ATOMS_GROUP_NAME", "Name of guide group in index file to use for alignment");
 
         // Advanced
-        keys.add("optional", "MAX_FORCE", "Maximum force magnitude (default 999)");
+        keys.add("optional", "MAX_FORCE", "Maximum force magnitude (default 9999)");
         // keys.add("optional", "STRIDE", "frequency of application of KEnRef"); //NO NEED
         keys.addFlag("FIT_TO_REFERENCE", false, "Fit coordinates to reference before calculating energy");
         keys.addFlag("SATURATE_FORCES", false, "Clamp forces to MAX_FORCE");
 
         // Output components
         // keys.addOutputComponent("bias", "default", "The instantaneous value of the bias potential"); //already added by Bias
-        keys.addOutputComponent("energy", "default", "Total KEnRef restraint energy");
-        keys.addOutputComponent("rmsd", "default", "RMSD from reference (after fitting)");
+        keys.addOutputComponent("energy", "default", "scalar", "Total KEnRef restraint energy");
+        keys.addOutputComponent("rmsd", "default", "scalar", "RMSD from reference (after fitting)");
 
         // more keywords? Claude says NO
         keys.use("RESTART");
@@ -124,8 +124,7 @@ namespace PLMD::kenref {
         parse("REF", reference_pdb_);
         if (reference_pdb_.empty()) {
             reference_pdb_ = atomname_mapping_file_;
-            log.printf("  REF not specified – using ATOMNAME_MAPPING file as reference: %s\n",
-                       reference_pdb_.c_str());
+            std::cout<< "  REF not specified – using ATOMNAME_MAPPING file as reference: " << reference_pdb_ << std::endl;
         }
 
         // ---- Load atom-name → serial map (1-based) -----------------------------------
@@ -163,7 +162,7 @@ namespace PLMD::kenref {
             for (int row = 0; row < table.rowCount(); row++) {
                 if (IoUtils::isNotPrepared(table(row, "atom1")) ||
                     IoUtils::isNotPrepared(table(row, "atom2"))) {
-                    log.printf("  WARNING: It seems that your data is from an unprepared file. We will try to handle it, but we can not guarantee the results.\n");
+                    std::cerr << "  WARNING: It seems that your data is from an unprepared file. We will try to handle it, but we can not guarantee the results.\n";
                     handleUnpreparedAtomNames = true;
                     break;
                 }
@@ -174,7 +173,7 @@ namespace PLMD::kenref {
                     IoUtils::normalizeName(table(row, "atom2"), handleUnpreparedAtomNames));
             }
             // Fill g0_ matrix (numPairs × 2)
-            g0_.resize(table.rowCount(), 2);
+            g0_.resize(static_cast<Eigen::Index>(table.rowCount()), 2);
             for (int i = 0; i < table.rowCount(); ++i) {
                 std::istringstream t1(table(i, "g1")), t2(table(i, "g2"));
                 t1 >> g0_(i, 0);
@@ -220,9 +219,9 @@ namespace PLMD::kenref {
 
         checkRead();
 
-        log.printf("  KEnRef bias  model=%s  k=%f  n=%f  proton_mhz=%f\n", energyModelStr.c_str(), k_, n_, proton_mhz_);
-        log.printf("  %zu guide atoms, %zu restrained atoms\n", guideAtoms_.size(), subAtoms_.size());
-        // log.printf("  %zu relaxation rates\n", rates_.size());
+        std::cout << "  KEnRef bias  model=" << energyModelStr <<"  k="<<k_<<"  n="<<n_<<"  proton_mhz="<< proton_mhz_ << "\n";
+        std::cout <<"  "<<guideAtoms_.size()<<" guide atoms, "<<subAtoms_.size()<<" restrained atoms\n";
+        std::cout <<"  "<<rates_.size()<<" relaxation rates\n";
 
         cite("Restraining interproton angular and distance dynamics with KEnRef. "
             "Amr Alhossary & Colin Smith, J Phys Chem B. 130, 11 (2026) DOI: 10.1021/acs.jpcb.5c08554");
@@ -236,8 +235,9 @@ namespace PLMD::kenref {
     //  PLUMED atom numbering instead of GROMACS domain-decomp IDs.
     // ============================================================
     void KEnRefBias::initializeParameters() {
-        log.printf("KEnRefBias::initializeParameters()\n - at log");
-        log.printf("MPI DEBUG: multi_sim_comm size = %zu rank = %zu\n", multi_sim_comm.Get_size(), multi_sim_comm.Get_rank());
+        printf("KEnRefBias::initializeParameters()\n - at log");
+        printf("MPI DEBUG: multi_sim_comm size = %d rank = %d\n", multi_sim_comm.Get_size(), multi_sim_comm.Get_rank());
+        printf("numOmpThreads = %d\n", OpenMP::getNumThreads());
 
         // NOTE: atomName_to_globalSerial_map_, atomName_pairs_, spec_den_data_list_,
         // experimental_data_table_, and g0_ are already populated by the constructor.
@@ -351,7 +351,7 @@ namespace PLMD::kenref {
         // inverse-Kabsch transform.
         subAtomsX_.resize(numSubAtoms, 3);
         lastFrameSubAtomsX_.resize(subAtomsX_.rows(), subAtomsX_.cols());
-        const int subSize = subAtomsX_.rows() * subAtomsX_.cols();
+        const auto subSize = subAtomsX_.rows() * subAtomsX_.cols();
         allDerivatives_buffer_.resize(static_cast<size_t>(subSize) * numSimulations, 0);
         derivatives_buffer_.resize(subSize, 0); //TODO No need to resize it if ! isMultiSim
 
@@ -373,15 +373,9 @@ namespace PLMD::kenref {
             for (int i = 0; i < nGuide; ++i) {
                 Vector pos = pdb.getPosition(guideAtoms_[i]);
                 // pdb positions are in nm (PLUMED internal); convert to Å
-                if constexpr (std::is_same_v<KEnRef_Real_t, double>) {
-                    guideAtomsReferenceCoords_(i, 0) = pos[0] * 10;
-                    guideAtomsReferenceCoords_(i, 1) = pos[1] * 10;
-                    guideAtomsReferenceCoords_(i, 2) = pos[2] * 10;
-                }else {
-                    guideAtomsReferenceCoords_(i, 0) = static_cast<KEnRef_Real_t>(pos[0]) * 10;
-                    guideAtomsReferenceCoords_(i, 1) = static_cast<KEnRef_Real_t>(pos[1]) * 10;
-                    guideAtomsReferenceCoords_(i, 2) = static_cast<KEnRef_Real_t>(pos[2]) * 10;
-                }
+                guideAtomsReferenceCoords_(i, 0) = to<KEnRef_Real_t>(pos[0]) * 10;
+                guideAtomsReferenceCoords_(i, 1) = to<KEnRef_Real_t>(pos[1]) * 10;
+                guideAtomsReferenceCoords_(i, 2) = to<KEnRef_Real_t>(pos[2]) * 10;
             }
             // Pre-center the reference (mirrors setGuideAtomsReferenceCoords)
             guideAtomsReferenceCoordsCentered_ =
@@ -413,9 +407,9 @@ namespace PLMD::kenref {
         for (int i = 0; i < out.rows(); ++i) {
             int serial = sub0Id_to_global1Serial_[i]; // 1-based serial
             const int li = serial_to_localIdx_.at(serial); // index into pos[]
-            out(i, 0) = static_cast<KEnRef_Real_t>(pos[li][0]) * 10; // nm → Å
-            out(i, 1) = static_cast<KEnRef_Real_t>(pos[li][1]) * 10;
-            out(i, 2) = static_cast<KEnRef_Real_t>(pos[li][2]) * 10;
+            out(i, 0) = to<KEnRef_Real_t>(pos[li][0]) * 10; // nm → Å
+            out(i, 1) = to<KEnRef_Real_t>(pos[li][1]) * 10;
+            out(i, 2) = to<KEnRef_Real_t>(pos[li][2]) * 10;
         }
     }
 
@@ -427,9 +421,9 @@ namespace PLMD::kenref {
         CoordsMatrixType<KEnRef_Real_t> gx(nGuide, 3);
         for (int i = 0; i < nGuide; ++i) {
             const int li = serial_to_localIdx_.at(guideAtoms_[i].serial());
-            gx(i, 0) = static_cast<KEnRef_Real_t>(pos[li][0]) * 10;
-            gx(i, 1) = static_cast<KEnRef_Real_t>(pos[li][1]) * 10;
-            gx(i, 2) = static_cast<KEnRef_Real_t>(pos[li][2]) * 10;
+            gx(i, 0) = to<KEnRef_Real_t>(pos[li][0]) * 10;
+            gx(i, 1) = to<KEnRef_Real_t>(pos[li][1]) * 10;
+            gx(i, 2) = to<KEnRef_Real_t>(pos[li][2]) * 10;
         }
         return gx;
     }
@@ -447,7 +441,7 @@ namespace PLMD::kenref {
         KEnRef_Real_t box[3][3];
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j)
-                box[i][j] = static_cast<KEnRef_Real_t>(box_nm[i][j]) * scale;
+                box[i][j] = to<KEnRef_Real_t>(box_nm[i][j]) * scale;
 
         // Half the diagonal: used as the threshold for detecting a box-crossing.
         // (Matches the original: only diagonal elements are used for the threshold check.)
@@ -500,7 +494,7 @@ namespace PLMD::kenref {
         }
 
         if (printStatistics && updated_count > 0)
-            log.printf("  INFO: restoreNoJump corrected %d atoms (out of %d)\n", updated_count, static_cast<int>(atoms.rows()));
+            std::cout << "  INFO: restoreNoJump corrected " << updated_count << " atoms (out of " << atoms.rows() << ")\n";
     }
 
     // ============================================================
@@ -522,9 +516,7 @@ namespace PLMD::kenref {
         const int simulationIndex = isMultiSim ? multi_sim_comm.Get_rank() : 0;
 
         if (step % 10 == 0) {
-            std::cout << "step:" << getStep() << std::endl;
-            log.printf("  --> numSimulations %d  simulationIndex %d  step %ld\n", numSimulations, simulationIndex, step);
-            log.flush();
+            std::cout << "  --> numSimulations "<<numSimulations<<"  simulationIndex "<<simulationIndex<<"  step "<<step <<"\n";
         }
 
         // ---- Kabsch alignment --------------------------------------------------------
@@ -576,15 +568,13 @@ namespace PLMD::kenref {
         KEnRef_Real_t energy = 0.0;
         std::optional<std::vector<CoordsMatrixType<KEnRef_Real_t> > > all_derivatives_opt;
 
-        if (!isMultiSim || simulationIndex == 0) {
+        if (/*!isMultiSim ||*/ simulationIndex == 0) {
             // Decompose the gathered matrix into a vector of per-replica matrices
             std::vector<CoordsMatrixType<KEnRef_Real_t> > allSims_vec;
             allSims_vec.reserve(numSimulations);
             for (int i = 0; i < numSimulations; ++i) {
-                allSims_vec.emplace_back(
-                    CoordsMapType<KEnRef_Real_t>(
-                        &allSimulationsSubAtomsX.data()[i * subSize],
-                        subAtomsX_.rows(), 3));
+                allSims_vec.emplace_back( CoordsMapType<KEnRef_Real_t>(&allSimulationsSubAtomsX.data()[i * subSize],
+                    subAtomsX_.rows(), 3));
             }
 
             switch (selectedEnergyModel) {
@@ -616,7 +606,7 @@ namespace PLMD::kenref {
             }
 
             if (step % 10 == 0)
-                log.printf("  Step %ld  KEnRef energy = %g\n", step, energy);
+                std::cout << "  Step "<<step<<"  KEnRef energy = "<< energy<<std::endl;
         }
 
         // ---- Scatter derivatives back to each replica --------------------------------
@@ -652,6 +642,14 @@ namespace PLMD::kenref {
         CoordsMatrixType<KEnRef_Real_t> derivatives_rectified =
                 Kabsch_Umeyama<KEnRef_Real_t>::applyInverseOfTransform(affine, deriv_map);
 
+        //TODO FIXME Putting the unit conversion in the "if" condition is just for backwards compatibility with the
+        //  published manuscript. But, it should be applied unconitionally.
+        if (selectedEnergyModel != KEnRef<KEnRef_Real_t>::energyModel::PLATEAUS) {
+            //   NOTE: KEnRef returns derivatives in Å⁻¹ (energy / Å), but PLUMED works in
+            //   nm. We scale by 1/10 to convert Å⁻¹ → nm⁻¹ (not that this is not Å → nm).
+            constexpr KEnRef_Real_t toNm = 10;
+            derivatives_rectified *= toNm;
+        }
         // ---- Optional force saturation -----------------------------------------------
         if (saturate_forces_)
             KEnRef<KEnRef_Real_t>::saturate(derivatives_rectified, maxForceSquared_, OpenMP::getNumThreads());
@@ -662,9 +660,6 @@ namespace PLMD::kenref {
         //   Since we're using ActionAtomistic::addForce which adds forces directly,
         //   we pass -derivatives_rectified (negated).
         //
-        //   NOTE: KEnRef returns derivatives in Å⁻¹ (energy / Å), but PLUMED works in
-        //   nm. We scale by 1/10 to convert Å⁻¹ → nm⁻¹.
-        constexpr KEnRef_Real_t toNm = 0.1;
         //TODO parallel for loop here
         for (int i = 0; i < derivatives_rectified.rows(); ++i) {
             //TODO is there a faster way than the next 2-step mapping? if so, use it everywhere
@@ -672,9 +667,9 @@ namespace PLMD::kenref {
             int li = serial_to_localIdx_.at(serial);
             Vector d(
                 //Keep the static cast (although it looks not useful) for future need.
-                static_cast<double>(derivatives_rectified(i, 0)) * toNm,
-                static_cast<double>(derivatives_rectified(i, 1)) * toNm,
-                static_cast<double>(derivatives_rectified(i, 2)) * toNm);
+                static_cast<double>(derivatives_rectified(i, 0)),
+                static_cast<double>(derivatives_rectified(i, 1)),
+                static_cast<double>(derivatives_rectified(i, 2)));
             // Get the atom index for this local index and add force (negated gradient)
             auto atomIndex = getValueIndices(getAbsoluteIndex(li));
             addForce(atomIndex, -d);
@@ -706,11 +701,10 @@ namespace PLMD::kenref {
         const auto end = std::chrono::high_resolution_clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin);
         calculateForces_time += elapsed.count();
-        if (step % 10 == 0 && simulationIndex == 0)
-            log.printf("  This step (%ld): %.5f s  Total walltime: %.3f s\n",
-                       step,
-                       static_cast<double>(elapsed.count()) * 1e-9,
-                       static_cast<double>(calculateForces_time) * 1e-9);
+        if (simulationIndex == 0 && step % 10 == 0)
+            printf("This iteration (%ld): %.5f seconds. All walltime %.3f seconds\n", step,
+                static_cast<double>(elapsed.count()) * 1e-9,
+                static_cast<double>(calculateForces_time) * 1e-9);
     }
 
     // ============================================================

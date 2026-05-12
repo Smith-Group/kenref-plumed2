@@ -12,6 +12,9 @@
 #include <string>
 #include <vector>
 
+template<typename To, typename From>
+To to(From v) noexcept { return static_cast<To>(v); }
+
 namespace PLMD::kenref {
     class KEnRefBias : public bias::Bias, public ActionAtomistic {
         // ------------------------------------------------------------------ //
@@ -25,7 +28,7 @@ namespace PLMD::kenref {
         // ------------------------------------------------------------------ //
         KEnRef_Real_t k_ = 1.0;
         KEnRef_Real_t n_ = 0.25;
-        KEnRef_Real_t maxForce_ = 999.0;
+        KEnRef_Real_t maxForce_ = 9999.0;
         KEnRef_Real_t maxForceSquared_ = maxForce_ * maxForce_;
 
         // ------------------------------------------------------------------ //
