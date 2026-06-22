@@ -39,6 +39,7 @@ namespace PLMD::kenref {
         keys.add("optional", "EXP_DATA_FOLDER", "Folder with experimental data (SIGMA model)");
         keys.add("optional", "PROTON_MHZ", "Proton MHz (SIGMA model)");
         keys.add("optional", "RATES", "Relaxation rates, comma-separated (SIGMA model)");
+        keys.add("optional", "RATES_FILE", "CSV file (a_coef.csv style: header row of rate names + one data row of values) overriding the default SIGMA relaxation rates");
         // keys.add("optional", "SPEC_DEN_DATA_FILE", "Spectral-density data file (SIGMA model)");
 
         // PLATEAUS model
@@ -105,7 +106,16 @@ namespace PLMD::kenref {
         if (selectedEnergyModel == KEnRef<KEnRef_Real_t>::energyModel::SIGMA) {
             parse("PROTON_MHZ", proton_mhz_);
             parse("EXP_DATA_FOLDER", exp_data_folder_);
-            // TODO: parse custom RATES if provided
+            // Optionally override the default rates_ (see KEnRefBias.h) from a CSV file in the
+            // a_coef.csv style: a header row of rate names + a single data row of values
+            // (read as a 1-row table → NamedRowVector). If RATES_FILE is not given, keep the default.
+            std::string rates_file;
+            parse("RATES_FILE", rates_file);
+            if (!rates_file.empty()) {
+                rates_ = IoUtils::readTable(rates_file, true, false).toNamedRowVector<KEnRef_Real_t>();
+                std::cout << "  Loaded SIGMA rates from RATES_FILE: " << rates_file << std::endl;
+            }
+            // TODO: parse custom RATES if provided (the comma-separated RATES keyword)
         } else {
             parse("EXP_DATA_FILE", experimental_data_file_);
         }
