@@ -7,6 +7,14 @@ include ../maketools/make.module
 # make KEnRef double
 CPPFLAGS += -DKENREF_DOUBLE
 
+# Option A (KEnRef model-abstraction restructure): the KEnRefBias implementation is hosted in the
+# KEnRef repo (kenref_plumed) and compiled here from the frame forwarders (KEnRefBias.{h,cpp}).
+# Prepend the repo's headers + plumedinterface source so they take precedence over any (older)
+# kenref headers pulled in via pkg-config below. Override KENREF_SRC_REPO to point at your checkout.
+# Phase G wires this through the build scripts / kenref pkg-config so the frame stays machine-neutral.
+KENREF_SRC_REPO ?= /home/amr/CLionProjects/KEnRef
+CPPFLAGS := -I$(KENREF_SRC_REPO)/include_core -I$(KENREF_SRC_REPO)/include_plumedinterface -I$(KENREF_SRC_REPO)/src $(CPPFLAGS)
+
 # Debug output
 $(info ===== Debug Info =====)
 # Debug: Print variables
