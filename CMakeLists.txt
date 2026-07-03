@@ -20,16 +20,23 @@ include_directories(
         /smithlab/opt/openmpi/5.0.7_clang20.1.1_cuda12.4.1/include
 )
 
-# 2. Add your KEnRef include paths manually
-# (Copy the content of KENREF_INCLUDE from your Makefile.conf, removing the -I flags)
+# 2. KEnRef include paths — point at the REPO working tree (not the installed prefix) so CLion resolves
+# the CURRENT KEnRef headers. `.../src` lets the frame forwarders' #include "plumedinterface/..." resolve
+# to the repo's src/plumedinterface/*.cpp (the real KEnRefBias impl the frame compiles).
+set(KENREF_REPO /home/amr/CLionProjects/KEnRef)
 include_directories(
-        /smithlab/opt/kenref/debug/AVX_512/include/core
-        /smithlab/opt/eigen/3.4.0/include/eigen3
+        ${KENREF_REPO}/include_core
+        ${KENREF_REPO}/include_plumedinterface
+        ${KENREF_REPO}/src
+        /smithlab/opt/eigen/5.0.1/release/include/eigen3
 )
 
 # 3. Add source files
-# Recursively find all C++ files so CLion indexes them
-file(GLOB_RECURSE SOURCES "src/*/*.cpp" "src/*/*.h")
+# Recursively find all C++ files so CLion indexes them — PLUMED's own src, PLUS the KEnRef repo's
+# plumedinterface source (the KEnRefBias impl the fork frame forwards to) so it shows up in this project.
+file(GLOB_RECURSE SOURCES "src/*/*.cpp" "src/*/*.h"
+        "${KENREF_REPO}/src/plumedinterface/*.cpp"
+        "${KENREF_REPO}/include_plumedinterface/plumedinterface/*.h")
 
 # 4. Create a fake target
 add_executable(plumed_dummy ${SOURCES}
