@@ -379,13 +379,14 @@ PLUMED_CONFIG_ENABLE([libhdf5],[search for libhdf5],[no])
 PLUMED_CONFIG_ENABLE([linuxperf],[activate the compile options for a more accurate report with perf on linux],[no])
 PLUMED_CONFIG_ENABLE([openacc],[search for openacc (use PLUMED_ACC_TYPE and PLUMED_ACC_GPU for controlling the settings)],[no])
 PLUMED_CONFIG_ENABLE([kenref],[enable the KEnRef pathway (compile the kenref module + find/link libkenref_core); equivalent to --enable-modules=+kenref],[no]) # Added by Amr Alhossary
-# KEnRef controls: with --enable-kenref, if kenref_core is not already installed configure builds it from a
-# PROVIDED --with-kenref-src checkout (delegated to KEnRef's own CMake). This branch does NOT auto-download
-# KEnRef; that convenience lives on the kenref-plumed-downloads branch.
+# KEnRef find-or-fetch controls: with --enable-kenref, if kenref_core is not already installed, configure
+# clones the KEnRef repo and delegates the build to its own CMake. Override the source / coordinates here.
 AC_ARG_WITH([kenref-src],
-  AS_HELP_STRING([--with-kenref-src=DIR],[local KEnRef checkout to build if kenref_core is not installed (with --enable-kenref)]),
+  AS_HELP_STRING([--with-kenref-src=DIR],[use a local KEnRef checkout instead of cloning it (with --enable-kenref)]),
   [with_kenref_src="$withval"],[with_kenref_src=""])
-AC_ARG_VAR([KENREF_ACCEL],[ACCEL/SIMD width to build kenref_core from --with-kenref-src (default: AVX2_256, runs everywhere)])
+AC_ARG_VAR([KENREF_GIT_URL],[KEnRef git URL to clone when --enable-kenref and kenref_core is not installed (default: https://github.com/Smith-Group/KEnRef.git)])
+AC_ARG_VAR([KENREF_GIT_TAG],[KEnRef git branch/tag to clone (default: repository default)])
+AC_ARG_VAR([KENREF_ACCEL],[ACCEL/SIMD width to build the fetched kenref_core with (default: AVX2_256, runs everywhere)])
 
 AC_ARG_VAR(SOEXT,[extension of dynamic libraries (so/dylib)])
 AC_ARG_VAR(STATIC_LIBS,[variables that should be linked statically directly to MD code - configure will add here -ldl if necessary ])
@@ -1087,24 +1088,30 @@ if test "$kenref" = true || test "$kenref_module_on" = yes ; then
     rm -f src/kenref.off
     touch src/kenref.on
   fi
-  # (b) FIND the core library (or build it from a PROVIDED --with-kenref-src). A plain pkg-config pre-check
-  #     (NOT PKG_CHECK_MODULES, to dodge autoconf's result caching): if kenref_core is not already installed,
-  #     build it from --with-kenref-src by DELEGATING to its OWN build manager (CMake — core lib + the exported
-  #     plumedinterface source the module compiles in-tree). This branch does NOT auto-download KEnRef (that
-  #     lives on kenref-plumed-downloads). Then the authoritative KENREF_CHECK_LIBS runs once and wires the
-  #     CFLAGS/LIBS. Controls: --with-kenref-src=DIR (local checkout), KENREF_ACCEL (SIMD of the built core).
+  # (b) FIND OR FETCH+BUILD the core library, so `--enable-kenref` ALONE is self-sufficient (no build.sh
+  #     needed). A plain pkg-config pre-check (NOT PKG_CHECK_MODULES, to dodge autoconf's result caching):
+  #     if kenref_core is not already installed, clone the KEnRef repo and DELEGATE the build to its OWN
+  #     build manager (CMake — core lib + the exported plumedinterface source the module compiles in-tree)
+  #     — kenref knows how to build kenref. Then the authoritative
+  #     KENREF_CHECK_LIBS runs once and wires the CFLAGS/LIBS. Controls: --with-kenref-src=DIR (local
+  #     checkout), KENREF_GIT_URL / KENREF_GIT_TAG (clone coords), KENREF_ACCEL (SIMD of the built core).
   if pkg-config --exists "kenref_core >= $KENREF_MIN_VERSION" 2>/dev/null \
      || pkg-config --exists "kenref_and_eigen3 >= $KENREF_MIN_VERSION" 2>/dev/null ; then
     AC_MSG_NOTICE([KEnRef: found an installed kenref_core >= $KENREF_MIN_VERSION via pkg-config])
   else
-    dnl This branch (kenref-plumed-master) does NOT auto-download KEnRef. Reuse an installed kenref_core
-    dnl (handled above) or build from a PROVIDED checkout (--with-kenref-src). Auto-clone lives on the
-    dnl kenref-plumed-downloads branch (re-merged after the PLUMED PR is accepted in principle).
-    AC_MSG_NOTICE([KEnRef: not installed -> building from --with-kenref-src (no auto-download on this branch)])
+    test -n "$KENREF_GIT_URL" || KENREF_GIT_URL="https://github.com/Smith-Group/KEnRef.git"
+    AC_MSG_NOTICE([KEnRef: not installed -> fetch+build kenref_core (delegated to the KEnRef repo's CMake)])
     kn_src="$with_kenref_src"
-    test -n "$kn_src" || AC_MSG_ERROR([kenref_core (>= $KENREF_MIN_VERSION) is not installed and this branch does
-  not auto-download it. Install kenref_core (put its prefix on PKG_CONFIG_PATH), or pass --with-kenref-src=DIR.
-  (The auto-download convenience lives on the kenref-plumed-downloads branch.)])
+    if test -z "$kn_src" ; then
+      kn_src="$PWD/kenref-deps/src"
+      if test ! -d "$kn_src/.git" ; then
+        kn_git=`command -v git 2>/dev/null`
+        test -n "$kn_git" || AC_MSG_ERROR([git is required to fetch KEnRef (or pass --with-kenref-src=DIR)])
+        AC_MSG_NOTICE([  cloning $KENREF_GIT_URL${KENREF_GIT_TAG:+ (branch $KENREF_GIT_TAG)}])
+        git clone ${KENREF_GIT_TAG:+--branch "$KENREF_GIT_TAG"} "$KENREF_GIT_URL" "$kn_src" \
+          || AC_MSG_ERROR([failed to clone KEnRef from $KENREF_GIT_URL -- pass --with-kenref-src=DIR to use a local checkout])
+      fi
+    fi
     test -f "$kn_src/CMakeLists.txt" || AC_MSG_ERROR([--with-kenref-src='$kn_src' is not a KEnRef checkout])
     kn_cmake=`command -v cmake 2>/dev/null`
     test -n "$kn_cmake" || AC_MSG_ERROR([cmake is required to build the fetched KEnRef core])
@@ -1135,8 +1142,8 @@ if test "$kenref" = true || test "$kenref_module_on" = yes ; then
   # authoritative check (finds it whether pre-installed or just built) + CFLAGS/LIBS wiring:
   KENREF_CHECK_LIBS
   if test "$HAVE_KENREF" != yes ; then
-    AC_MSG_ERROR([KEnRef requested but kenref_core >= $KENREF_MIN_VERSION could not be located (or built from
-  --with-kenref-src). See the build log above; install kenref_core on PKG_CONFIG_PATH or pass --with-kenref-src=DIR.])
+    AC_MSG_ERROR([KEnRef requested but kenref_core >= $KENREF_MIN_VERSION could not be located even after
+  fetch+build. See the build log above, or pass --with-kenref-src=DIR / set KENREF_GIT_URL.])
   fi
 
   # Resolve the module's COMPILE includes ONCE, here, while PKG_CONFIG_PATH is set, and bake them into

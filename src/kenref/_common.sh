@@ -18,16 +18,18 @@ ASSUME_YES=0
 BUILD_TYPE="Release"
 ACCEL=""                       # empty => auto-detect this machine's SIMD (like GROMACS)
 JOBS="$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)"
-KENREF_SRC=""                  # local KEnRef repo (REQUIRED if kenref_core is not already installed)
+KENREF_SRC=""                  # local KEnRef repo; else located/cloned
 KENREF_PREFIX=""               # kenref_core install prefix (default under PLUMED_ROOT/install)
+KENREF_GIT_URL="${KENREF_GIT_URL:-https://github.com/Smith-Group/KEnRef.git}"
+KENREF_GIT_TAG="${KENREF_GIT_TAG:-}"
 PLUMED_PREFIX="${PLUMED_ROOT}/install/plumed"
-# GROMACS (batch script): a PROVIDED 2025.x source is required on this branch (auto-fetch is deferred).
+# GROMACS (batch script): use a provided source, else fetch one to a PLUMED-related dir (separate tree).
 GROMACS_SRC=""
 GROMACS_PREFIX="${PLUMED_ROOT}/install/gromacs"
+GROMACS_GIT_URL="${GROMACS_GIT_URL:-https://gitlab.com/gromacs/gromacs.git}"
+GROMACS_GIT_TAG="${GROMACS_GIT_TAG:-latest-2025}"   # 'latest-2025' => newest v2025.x (PLUMED wants the latest 2025.x)
+GROMACS_FETCH_DIR="${PLUMED_ROOT}/build/gromacs-src"   # plumed-related; persisted+reused
 PATCH_ENGINE=""                # empty => auto (newest gromacs-2025.x shipped with this PLUMED)
-# NOTE: this branch (kenref-plumed-master) does NOT auto-download kenref or gromacs — it reuses an installed
-# kenref (pkg-config) or a provided --kenref-src, and a provided --gromacs-src. The auto-download convenience
-# lives on the 'kenref-plumed-downloads' branch (re-merged after the PLUMED PR is accepted in principle).
 
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33mWARNING: %s\033[0m\n' "$*" >&2; }
@@ -59,20 +61,18 @@ kn_usage() {
     cat <<EOF
 Usage: src/kenref/${KN_SCRIPT:-build}.sh [options]   (no options => interactive)
 
-  --kenref-src DIR       local KEnRef repo (REQUIRED if kenref_core is not already installed; no auto-download)
+  --kenref-src DIR       local KEnRef repo (default: auto-clone ${KENREF_GIT_URL} if none found)
   --kenref-prefix DIR    kenref_core install prefix   (default: ${PLUMED_ROOT}/install/kenref)
   --plumed-prefix DIR    PLUMED install prefix         (default: ${PLUMED_PREFIX})
   --build-type T         Release | Debug | RelWithDebInfo   (default: ${BUILD_TYPE})
   --accel A              AVX_512 | AVX_256 | AVX2_256        (default: auto-detect)
   --jobs N               parallel build jobs                (default: ${JOBS})
 $( [ "${KN_BATCHES:-0}" = 1 ] && cat <<G
-  --gromacs-src DIR      GROMACS 2025.x source (REQUIRED — no auto-download on this branch)
+  --gromacs-src DIR      GROMACS 2025.x source (omit to auto-fetch ${GROMACS_GIT_TAG})
   --gromacs-prefix DIR   GROMACS install prefix      (default: ${GROMACS_PREFIX})
   --patch-engine E       plumed patch -e engine      (default: auto)
 G
 )
-  (This branch reuses an installed/provided kenref + a provided gromacs; auto-download lives on
-   the kenref-plumed-downloads branch.)
   -y | --yes             non-interactive; take defaults
   -h | --help
 
@@ -113,12 +113,14 @@ ensure_kenref() {
         say "kenref found via pkg-config (v$(pkg-config --modversion kenref_core 2>/dev/null || pkg-config --modversion kenref_and_eigen3)) — reusing it."
         return
     fi
-    [ -n "$KENREF_SRC" ] || ask_val KENREF_SRC "local KEnRef repo path (required — no auto-download on this branch)"
-    # This branch does NOT clone KEnRef. Reuse an installed kenref_core (handled above) or build from a PROVIDED
-    # checkout (--kenref-src). Auto-clone lives on the kenref-plumed-downloads branch.
-    [ -n "$KENREF_SRC" ] || die "kenref_core is not installed and auto-download is disabled on this branch.
-  Put an installed kenref prefix on PKG_CONFIG_PATH, or pass --kenref-src DIR.
-  (The auto-clone convenience lives on the 'kenref-plumed-downloads' branch.)"
+    [ -n "$KENREF_SRC" ] || ask_val KENREF_SRC "local KEnRef repo path (blank = clone into the build folder)"
+    if [ -z "$KENREF_SRC" ]; then
+        # NO sibling-guessing: an unrelated ../KEnRef or ~/git/KEnRef could be a DIFFERENT version and cause a
+        # version collision. Always fetch a known copy INTO our own build folder (unless --kenref-src was given),
+        # so co-located kenref/plumed/gromacs checkouts can never be picked up by accident. Persisted + reused.
+        KENREF_SRC="${PLUMED_ROOT}/build/kenref-src"
+        [ -d "$KENREF_SRC/.git" ] || { say "cloning KEnRef ${KENREF_GIT_URL}"; git clone ${KENREF_GIT_TAG:+--branch "$KENREF_GIT_TAG"} "$KENREF_GIT_URL" "$KENREF_SRC" || die "KEnRef clone failed; pass --kenref-src DIR."; }
+    fi
     [ -f "$KENREF_SRC/CMakeLists.txt" ] || die "--kenref-src '$KENREF_SRC' is not a KEnRef checkout."
     : "${KENREF_PREFIX:=${PLUMED_ROOT}/install/kenref}"
 
@@ -200,13 +202,25 @@ build_plumed() {
 
 # ---- STEP 3: GROMACS 2025.x, batched with THIS PLUMED's `plumed patch` -------
 build_gromacs() {
-    # A PROVIDED GROMACS 2025.x source is required on this branch (auto-fetch is deferred to the
-    # kenref-plumed-downloads branch). `plumed patch` rewrites the source in place, so it must be a checkout
-    # dedicated to the plumed path (not the one kenref-gmx builds against).
-    [ -n "$GROMACS_SRC" ] || ask_val GROMACS_SRC "GROMACS 2025.x source (required — no auto-download on this branch)"
-    [ -n "$GROMACS_SRC" ] || die "no GROMACS source provided and auto-download is disabled on this branch.
-  Pass --gromacs-src DIR (a GROMACS 2025.x checkout, pref 2025.4).
-  (The auto-fetch convenience lives on the 'kenref-plumed-downloads' branch.)"
+    # provided source, else fetch to a PLUMED-related dir (separate from any kenref-gmx gromacs)
+    if [ -z "$GROMACS_SRC" ]; then
+        if interactive; then ask_val GROMACS_SRC "GROMACS 2025.x source (blank = fetch ${GROMACS_GIT_TAG})"; fi
+    fi
+    if [ -z "$GROMACS_SRC" ]; then
+        GROMACS_SRC="$GROMACS_FETCH_DIR"
+        if [ ! -f "${GROMACS_SRC}/CMakeLists.txt" ]; then
+            local tag="$GROMACS_GIT_TAG"
+            if [ "$tag" = "latest-2025" ]; then    # resolve newest v2025.x on the remote
+                tag="$(git ls-remote --tags --refs "$GROMACS_GIT_URL" 2>/dev/null | grep -oE 'v2025\.[0-9]+' | sort -V | tail -1)"
+                [ -z "$tag" ] && tag="v2025.4"
+            fi
+            say "fetching GROMACS ${tag} -> ${GROMACS_SRC} (plumed-related)"
+            git clone --depth 1 --branch "$tag" "$GROMACS_GIT_URL" "$GROMACS_SRC" \
+                || die "GROMACS clone failed; provide one with --gromacs-src DIR."
+        else
+            say "reusing fetched GROMACS at ${GROMACS_SRC}"
+        fi
+    fi
     [ -f "${GROMACS_SRC}/CMakeLists.txt" ] || die "--gromacs-src '${GROMACS_SRC}' is not a GROMACS source tree."
 
     local ver

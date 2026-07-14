@@ -17,39 +17,37 @@ To start from the **KEnRef** side instead, see `INSTALL.md` in the KEnRef repo.
 
 Both are thin orchestrators sharing `_common.sh`; power users need only a command or two.
 
-> **This branch (`kenref-plumed-master`) does not auto-download** KEnRef or GROMACS. It reuses an installed
-> `kenref_core` (via `pkg-config`) or builds from a **provided** `--kenref-src`, and batches a **provided**
-> `--gromacs-src`. The auto-download convenience lives on the **`kenref-plumed-downloads`** branch (re-merged
-> after the PLUMED PR is accepted in principle).
-
 ```bash
 # PLUMED with the kenref module, NO gromacs:
-src/kenref/build-only.sh --kenref-src ~/KEnRef -y    # (or omit if kenref_core is on PKG_CONFIG_PATH)
+src/kenref/build-only.sh -y                          # find kenref (or clone), build+install PLUMED
+src/kenref/build-only.sh --kenref-src ~/KEnRef -y
 
-# PLUMED + a GROMACS 2025.x batched with it (provide the gromacs source):
-src/kenref/build-and-batch.sh --kenref-src ~/KEnRef --gromacs-src ~/gromacs-2025.4 -y
+# PLUMED + a GROMACS 2025.x batched with it:
+src/kenref/build-and-batch.sh -y                     # also fetch+patch+build GROMACS 2025.x
+src/kenref/build-and-batch.sh --gromacs-src ~/gromacs-2025.4 -y   # use a provided gromacs
 ```
 
-What they do: **kenref_core** — reused if found via `pkg-config`, else built from `--kenref-src` by **its**
-`build.sh` (with the plumedinterface exported). **PLUMED** — built by its own autotools (`--enable-kenref
---enable-modules=+kenref`). **GROMACS** (batch script) — a **provided** `--gromacs-src`, `plumed patch`ed
-(native `GMX_USE_PLUMED` alone is *not* full integration) then built. Toolchain from the environment
-(`CXX=mpicxx CXXFLAGS="-stdlib=libc++" …`); `--accel` auto-detects.
+What they do: **kenref_core** — reused if found via `pkg-config`, else the KEnRef repo is located
+(`--kenref-src`) or **auto-cloned** and **its** `build.sh` builds+installs it (with the plumedinterface
+exported). Starting from PLUMED never assumes KEnRef is already present — an empty machine just clones it. **PLUMED** — built by its own autotools (`--enable-kenref
+--enable-modules=+kenref`). **GROMACS** (batch script) — a provided source, else fetched to a
+plumed-related dir; `plumed patch`ed (native `GMX_USE_PLUMED` alone is *not* full integration) then built.
+Toolchain from the environment (`CXX=mpicxx CXXFLAGS="-stdlib=libc++" …`); `--accel` auto-detects.
 
 ## Option B — PLUMED's build system alone (no script)
 
-`--enable-kenref` finds an installed `kenref_core`, or builds one from a **provided** `--with-kenref-src`
-(delegated to KEnRef's CMake), then links it. On this branch it does **not** clone KEnRef.
+`--enable-kenref` is **self-sufficient**: if `kenref_core` isn't installed, `configure` clones the KEnRef
+repo and **delegates the build to KEnRef's CMake**, then links it.
 
 ```bash
 autoreconf --force
-./configure --enable-kenref --with-kenref-src=~/KEnRef CXXFLAGS="-stdlib=libc++ -O3 -std=c++17 -march=skylake-avx512"
+./configure --enable-kenref CXXFLAGS="-stdlib=libc++ -O3 -std=c++17 -march=skylake-avx512"
 make -j && make install
 ```
 
-Controls: `--with-kenref-src=DIR` (required if `kenref_core` isn't installed), `KENREF_ACCEL`. Already have
-`kenref_core` installed? Put it on `PKG_CONFIG_PATH` and `configure` reuses it (then `--with-kenref-src` is
-unnecessary). `--enable-kenref` and `--enable-modules=+kenref` converge (either enables the whole pathway); a
+Controls (only if you don't want the default clone): `--with-kenref-src=DIR`, `KENREF_GIT_URL`/`KENREF_GIT_TAG`,
+`KENREF_ACCEL`. Already have `kenref_core` installed? Put it on `PKG_CONFIG_PATH` and `configure` reuses it.
+`--enable-kenref` and `--enable-modules=+kenref` converge (either enables the whole pathway); a
 `kenref_core >= <min>` floor rejects a stale core at configure time.
 
 ## Self-contained binaries (rpath)
