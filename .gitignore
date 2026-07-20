@@ -29,3 +29,6 @@ __pycache__
 .python-version
 .vscode
 .claude
+
+# KEnRef: records the toolchain of the last kenref-driven plumed build (see src/kenref/_common.sh)
+.kenref-build-signature

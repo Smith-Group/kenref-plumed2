@@ -378,7 +378,14 @@ PLUMED_CONFIG_ENABLE([libitensor],[search for libitensor],[no])
 PLUMED_CONFIG_ENABLE([libhdf5],[search for libhdf5],[no])
 PLUMED_CONFIG_ENABLE([linuxperf],[activate the compile options for a more accurate report with perf on linux],[no])
 PLUMED_CONFIG_ENABLE([openacc],[search for openacc (use PLUMED_ACC_TYPE and PLUMED_ACC_GPU for controlling the settings)],[no])
-PLUMED_CONFIG_ENABLE([kenref],[search for kenref core library],[no]) # Added by Amr Alhossary
+PLUMED_CONFIG_ENABLE([kenref],[enable the KEnRef pathway (compile the kenref module + find/link libkenref_core); equivalent to --enable-modules=+kenref],[no]) # Added by Amr Alhossary
+# KEnRef controls: with --enable-kenref, if kenref_core is not already installed configure builds it from a
+# PROVIDED --with-kenref-src checkout (delegated to KEnRef's own CMake). This branch does NOT auto-download
+# KEnRef; that convenience lives on the kenref-plumed-downloads branch.
+AC_ARG_WITH([kenref-src],
+  AS_HELP_STRING([--with-kenref-src=DIR],[local KEnRef checkout to build if kenref_core is not installed (with --enable-kenref)]),
+  [with_kenref_src="$withval"],[with_kenref_src=""])
+AC_ARG_VAR([KENREF_ACCEL],[ACCEL/SIMD width to build kenref_core from --with-kenref-src (default: AVX2_256, runs everywhere)])
 
 AC_ARG_VAR(SOEXT,[extension of dynamic libraries (so/dylib)])
 AC_ARG_VAR(STATIC_LIBS,[variables that should be linked statically directly to MD code - configure will add here -ldl if necessary ])
@@ -982,8 +989,8 @@ AC_DEFUN([KENREF_CHECK_LIBS], [
   # If found, it defines: KENREF_C_CFLAGS, KENREF_C_LIBS, KENREF_E_CFLAGS, KENREF_E_LIBS
   # Note: The third argument is the shell command if found, fourth is if not found.
 
-  PKG_CHECK_MODULES([KENREF_C], [kenref_core], [
-    AC_MSG_NOTICE([    Found kenref_core. Checking for Eigen3...])
+  PKG_CHECK_MODULES([KENREF_C], [kenref_core >= $KENREF_MIN_VERSION], [
+    AC_MSG_NOTICE([    Found kenref_core (>= $KENREF_MIN_VERSION). Checking for Eigen3...])
 
     PKG_CHECK_MODULES([KENREF_E], [eigen3], [
 
@@ -991,7 +998,10 @@ AC_DEFUN([KENREF_CHECK_LIBS], [
       AC_MSG_NOTICE([    SUCCESS: KEnRef Core linked with external Eigen3.])
 
       AC_SUBST([KENREF_LIBS], ["$KENREF_C_LIBS $KENREF_E_LIBS"])
-      AC_SUBST([KENREF_INCLUDE], ["$KENREF_C_CFLAGS $KENREF_E_CFLAGS"])
+      # kenref_core.pc already `Requires: eigen3`, so KENREF_C_CFLAGS already carries the eigen3 -I; do NOT
+      # append KENREF_E_CFLAGS as well or the eigen3 include is duplicated. (The eigen3 check above still runs
+      # for validation and for KENREF_E_LIBS in KENREF_LIBS.)
+      AC_SUBST([KENREF_INCLUDE], ["$KENREF_C_CFLAGS"])
       AC_SUBST([HAVE_KENREF], [yes])
       # Next line is new
       LIBS="$KENREF_C_LIBS $KENREF_E_LIBS $LIBS"
@@ -1012,7 +1022,7 @@ AC_DEFUN([KENREF_CHECK_LIBS], [
 
     AC_MSG_NOTICE([  Trying: kenref_and_eigen3 (self-contained)...])
 
-    PKG_CHECK_MODULES([KENREF_FALLBACK], [kenref_and_eigen3], [
+    PKG_CHECK_MODULES([KENREF_FALLBACK], [kenref_and_eigen3 >= $KENREF_MIN_VERSION], [
 
       # SUCCESS 2: Found the fallback. Set final variables.
       AC_MSG_NOTICE([    SUCCESS: KEnRef linked with self-contained library.])
@@ -1035,8 +1045,120 @@ AC_DEFUN([KENREF_CHECK_LIBS], [
   AC_MSG_NOTICE([KEnRef Final Status: $HAVE_KENREF])
 ])dnl
 
-# Require the check to run during the PLUMED configuration process
-KENREF_CHECK_LIBS
+# ==============================================================================
+# KEnRef gating (Amr Alhossary) — CONVERGENCE.
+# --enable-kenref and --enable-modules=+kenref are two entry points to the SAME
+# pathway: passing EITHER one enables the whole KEnRef feature (the `kenref`
+# module is compiled AND the KEnRef core library is located & linked); passing
+# NEITHER disables it entirely (no dependency, module not built). Because the
+# module's on/off marker (src/kenref.on) is consumed at make time (globbed), we
+# can flip it here so whichever switch the user chose converges to one result.
+# ==============================================================================
+KENREF_MIN_VERSION=2.0.0          # floor that catches a stale/mismatched kenref_core (keep in lockstep
+                                  # with KEnRef's CMake project(VERSION); v2.0.0 = model-abstraction restructure)
+
+# The kenref module's COMPILE includes are resolved ONCE here (below, on success) and baked into
+# Makefile.conf as KENREF_PLUMED_INCLUDE, so src/kenref/Makefile never calls pkg-config at parse time (which
+# would fail under a `sudo make install` that re-parses this Makefile with a stripped PKG_CONFIG_PATH).
+# Default empty so @KENREF_PLUMED_INCLUDE@ always substitutes, even when KEnRef is disabled.
+AC_SUBST([KENREF_PLUMED_INCLUDE], [""])
+
+kenref_module_on=no
+test -f src/kenref.on && kenref_module_on=yes
+
+# "KEnRef wanted" iff EITHER switch is set (the library flag OR the module flag).
+if test "$kenref" = true || test "$kenref_module_on" = yes ; then
+  # (0) rpath ON by default for KEnRef builds. A KEnRef build links libkenref_core from a non-system prefix
+  #     (and, IF you choose such a toolchain, may also link a non-system C++ runtime such as libc++). If ANY
+  #     linked library lives outside the system loader path, the plumed executable AND libplumedKernel.so must
+  #     record those dirs (RPATH) to run without LD_LIBRARY_PATH -- otherwise `sudo make install` (which
+  #     re-runs the build's json step with the environment stripped) can fail with e.g. "libc++.so.1: cannot
+  #     open shared object file", and the installed binary only runs when a matching module is loaded.
+  #     --enable-rpath records $LIBRARY_PATH into the RUNPATH of both; it is harmless for a pure
+  #     system-library build. Default it ON here (PLUMED's global default is off) UNLESS the user EXPLICITLY
+  #     passed --disable-rpath. $enable_rpath is set by AC_ARG_ENABLE: "no" iff --disable-rpath.
+  if test "$enable_rpath" != "no" && test "$rpath" != true ; then
+    AC_MSG_NOTICE([KEnRef: enabling rpath by default so the binaries are self-contained (override: --disable-rpath)])
+    rpath=true
+  fi
+  # (a) make sure the module gets compiled — covers `--enable-kenref` given without +kenref (idempotent).
+  if test "$kenref_module_on" = no ; then
+    AC_MSG_NOTICE([KEnRef: --enable-kenref implies the 'kenref' module -> enabling it])
+    rm -f src/kenref.off
+    touch src/kenref.on
+  fi
+  # (b) FIND the core library (or build it from a PROVIDED --with-kenref-src). A plain pkg-config pre-check
+  #     (NOT PKG_CHECK_MODULES, to dodge autoconf's result caching): if kenref_core is not already installed,
+  #     build it from --with-kenref-src by DELEGATING to its OWN build manager (CMake — core lib + the exported
+  #     plumedinterface source the module compiles in-tree). This branch does NOT auto-download KEnRef (that
+  #     lives on kenref-plumed-downloads). Then the authoritative KENREF_CHECK_LIBS runs once and wires the
+  #     CFLAGS/LIBS. Controls: --with-kenref-src=DIR (local checkout), KENREF_ACCEL (SIMD of the built core).
+  if pkg-config --exists "kenref_core >= $KENREF_MIN_VERSION" 2>/dev/null \
+     || pkg-config --exists "kenref_and_eigen3 >= $KENREF_MIN_VERSION" 2>/dev/null ; then
+    AC_MSG_NOTICE([KEnRef: found an installed kenref_core >= $KENREF_MIN_VERSION via pkg-config])
+  else
+    dnl This branch (kenref-plumed-master) does NOT auto-download KEnRef. Reuse an installed kenref_core
+    dnl (handled above) or build from a PROVIDED checkout (--with-kenref-src). Auto-clone lives on the
+    dnl kenref-plumed-downloads branch (re-merged after the PLUMED PR is accepted in principle).
+    AC_MSG_NOTICE([KEnRef: not installed -> building from --with-kenref-src (no auto-download on this branch)])
+    kn_src="$with_kenref_src"
+    test -n "$kn_src" || AC_MSG_ERROR([kenref_core (>= $KENREF_MIN_VERSION) is not installed and this branch does
+  not auto-download it. Install kenref_core (put its prefix on PKG_CONFIG_PATH), or pass --with-kenref-src=DIR.
+  (The auto-download convenience lives on the kenref-plumed-downloads branch.)])
+    test -f "$kn_src/CMakeLists.txt" || AC_MSG_ERROR([--with-kenref-src='$kn_src' is not a KEnRef checkout])
+    kn_cmake=`command -v cmake 2>/dev/null`
+    test -n "$kn_cmake" || AC_MSG_ERROR([cmake is required to build the fetched KEnRef core])
+    kn_bdir="$PWD/kenref-deps/build"
+    kn_prefix="$PWD/kenref-deps/prefix"
+    # Build kenref_core AND export the plumedinterface (headers + src/plumedinterface/*.cpp + kenref_plumed.pc)
+    # -- KENREF_EXPORT_PLUMEDINTERFACE=ON: this PLUMED build needs that source to compile the module in-tree
+    # (Option A), so it IS "asked for" here. We do NOT compile-validate it (BUILD_KENREF_PLUMED) -- that is a
+    # separate opt-in the module's own `make` covers.
+    AC_MSG_NOTICE([  building kenref_core + exporting plumedinterface -> $kn_prefix (delegated to KEnRef's CMake; a few minutes)])
+    "$kn_cmake" -S "$kn_src" -B "$kn_bdir" -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_KENREF_CORE=ON -DBUILD_KENREF_GMX=OFF -DKENREF_EXPORT_PLUMEDINTERFACE=ON \
+        ${KENREF_ACCEL:+-DACCEL="$KENREF_ACCEL"} -DCMAKE_INSTALL_PREFIX="$kn_prefix" \
+        ${CXX:+-DCMAKE_CXX_COMPILER="$CXX"} ${CC:+-DCMAKE_C_COMPILER="$CC"} \
+        ${CXXFLAGS:+-DCMAKE_CXX_FLAGS="$CXXFLAGS"} \
+        || AC_MSG_ERROR([CMake configure of KEnRef failed])
+    "$kn_cmake" --build "$kn_bdir" -j || AC_MSG_ERROR([building KEnRef core failed])
+    "$kn_cmake" --install "$kn_bdir" || AC_MSG_ERROR([installing KEnRef core failed])
+    export PKG_CONFIG_PATH="$kn_prefix/lib/pkgconfig:$kn_prefix/share/pkgconfig:$PKG_CONFIG_PATH"
+    # prefer the external-eigen flavor: surface the eigen3.pc KEnRef's CMake used (from its build cache)
+    kn_eig=`sed -n 's/^Eigen3_DIR:PATH=//p' "$kn_bdir/CMakeCache.txt" 2>/dev/null`
+    if test -n "$kn_eig" && test -f "$kn_eig/eigen3.pc" ; then
+      export PKG_CONFIG_PATH="$kn_eig:$PKG_CONFIG_PATH"
+    fi
+    AC_MSG_NOTICE([KEnRef: kenref_core built; PKG_CONFIG_PATH updated for the checks below])
+  fi
+
+  # authoritative check (finds it whether pre-installed or just built) + CFLAGS/LIBS wiring:
+  KENREF_CHECK_LIBS
+  if test "$HAVE_KENREF" != yes ; then
+    AC_MSG_ERROR([KEnRef requested but kenref_core >= $KENREF_MIN_VERSION could not be located (or built from
+  --with-kenref-src). See the build log above; install kenref_core on PKG_CONFIG_PATH or pass --with-kenref-src=DIR.])
+  fi
+
+  # Resolve the module's COMPILE includes ONCE, here, while PKG_CONFIG_PATH is set, and bake them into
+  # Makefile.conf (KENREF_PLUMED_INCLUDE -> src/kenref/Makefile's KENREF_PLUMED_CPPFLAGS). This mirrors how the
+  # LINK flags already flow (configure -> LIBS -> DYNAMIC_LIBS): the module never calls pkg-config at make
+  # time, so a later `sudo make install` (which re-parses src/kenref/Makefile as root with PKG_CONFIG_PATH
+  # stripped) still gets the flags configure captured. kenref_plumed.pc exposes -I core -I plumedinterface
+  # -I src (+ eigen3) -- the Option-A source paths kenref_core.pc lacks.
+  KENREF_PLUMED_INCLUDE=`pkg-config --cflags kenref_plumed 2>/dev/null`
+  AC_SUBST([KENREF_PLUMED_INCLUDE])
+  if test -z "$KENREF_PLUMED_INCLUDE" ; then
+    AC_MSG_ERROR([KEnRef: kenref_core was found but kenref_plumed.pc was not (needed for the module's
+  plumedinterface include paths). Ensure the kenref install was built with -DKENREF_EXPORT_PLUMEDINTERFACE=ON
+  and that its prefix is on PKG_CONFIG_PATH.])
+  fi
+  AC_MSG_NOTICE([KEnRef: module compile includes baked into Makefile.conf: $KENREF_PLUMED_INCLUDE])
+else
+  # Neither switch: do not search, do not depend, do not build the module.
+  AC_MSG_NOTICE([KEnRef: disabled (neither --enable-kenref nor --enable-modules=+kenref) -> module not built.])
+  AC_SUBST([HAVE_KENREF],[no])
+  have_kenref=no
+fi
 
 # libmetatomic requires libtorch
 if test $libmetatomic = true ; then
